@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>1en und 0en</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: #11132e;
+        }
+
+        #waiting, #data {
+            display: none;
+        }
+
+        h1 {
+            color: #6977d5;
+            font-size: 2rem;
+        }
+
+        input {
+            border: none;
+            background: #242c61;
+            color: white;
+            font-size: 1.5em;
+            padding: 0.5em;
+            margin: 0.5em;
+            border-radius: .5em;
+
+            box-shadow: 0 .2em 5em 0 #6977d530;
+        }
+
+        input:disabled {
+            background: transparent;
+            box-shadow: none;
+        }
+
+        section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100vh;
+        }
+
+        button {
+            border: none;
+            background: #1e2453;
+            color: #6977d5;
+            font-size: 1.5em;
+            padding: 0.5em;
+            margin: 0.5em;
+            border-radius: .5em;
+            cursor: pointer;
+
+            box-shadow: 0 .2em 5em 0 #6977d530;
+        }
+
+        button:hover {
+            background: #242c61;
+        }
+
+        li {
+            color: #6977d5;
+            font-size: 1.5rem;
+            list-style: none;
+            margin: 0.5em;
+            padding: .2em .5em;
+            border-radius: .4em;
+
+            cursor: pointer;
+        }
+
+        li:hover {
+            background: #242c61;
+        }
+    </style>
+</head>
+<body>
+    <section id="enter_channel">
+        <h1>
+            Mit welchem Kanal möchtest du dich verbinden?
+        </h1>
+        <input type="text" id="channel">
+        <button id="connect">
+            Verbinden
+        </button>
+
+        <h1>Verfügbare Kanäle</h1>
+        <ul id="available_channels"></ul>
+    </section>
+    <section id="waiting">
+        <h1>
+            Warte auf anderen Teilnehmer...
+        </h1>
+    </section>
+    <section id="data">
+        <button id="send">
+            Sende eine 1!
+        </button>
+        <div style="display: flex; flex-direction: column; align-items: flex-start">
+            <label for="range">
+                Aktualisierungsintervall: <span id="range_value">1</span> Sekunden
+            </label>
+            <input type="range" id="range" min="1" max="5" value="1" step="1">
+        </div>
+    </section>
+</body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.js"></script>
+<script>
+    const SIGNALING_SERVER = window.location.origin;
+
+    let lastNumber = 0;
+    let channel;
+
+    class Graph {
+        #availableWidth;
+        #interval;
+        #numbers;
+        #maxNumbersAmount;
+
+        constructor() {}
+
+        #clearCanvas() {
+            this.context.clearRect(0, 0, this.#availableWidth, 100);
+
+            this.context.beginPath()
+            this.context.fillStyle = "#242c61";
+
+            for (let i = 0; i < this.#availableWidth; i += 100) {
+                this.context.rect(i, 0, 1, 100);
+            }
+
+            this.context.fill();
+        }
+
+        setup() {
+            // Altes canvas entfernen
+            const $oldCanvas = document.getElementById("diagram");
+            if ($oldCanvas) {
+                $oldCanvas.remove();
+            }
+
+            const $canvas = document.createElement("canvas");
+            $canvas.id = "diagram";
+
+            const availableWidth = window.innerWidth;
+            const width = Math.floor(availableWidth / 100) * 100;
+            this.#maxNumbersAmount = Math.floor(width / 100);
+
+            $canvas.width = width;
+            $canvas.height = 100;
+
+            document.getElementById("data").appendChild($canvas);
+
+            this.context = $canvas.getContext("2d");
+
+            this.#availableWidth = width;
+            this.number = 0;
+
+            this.#numbers = [];
+
+            this.#clearCanvas();
+        }
+
+        #setInterval(interval = 1000) {
+            clearInterval(this.#interval);
+            const self = this;
+            this.#interval = setInterval(() => {
+                const nextNumber = self.number;
+
+                if (self.#numbers.length >= self.#maxNumbersAmount) {
+                    self.#numbers = [
+                        ...self.#numbers.slice(1),
+                        nextNumber
+                    ]
+                } else {
+                    self.#numbers.push(nextNumber);
+                }
+
+                self.draw();
+
+                self.number = 0;
+            }, interval);
+        }
+
+        start() {
+            this.#numbers = [];
+            this.#setInterval();
+        }
+
+        updateInterval(newInterval) {
+            this.#setInterval(newInterval);
+        }
+
+        stop() {
+            clearInterval(this.#interval);
+        }
+
+        draw() {
+            // Clear
+            this.#clearCanvas();
+
+            let position = 0;
+            let previousNumber = null;
+
+            for (const number of this.#numbers) {
+                if (previousNumber !== null && previousNumber !== number) {
+                    this.context.beginPath()
+                    this.context.fillStyle = "white";
+                    this.context.rect(position, 0, 1, 100);
+                    this.context.fill();
+                }
+
+                this.context.beginPath()
+                this.context.fillStyle = "white";
+                this.context.rect(position, number === 0 ? 99 : 0, 100, 1);
+                this.context.fill();
+
+                position += 100;
+
+                previousNumber = number;
+            }
+        }
+    }
+
+    let graph;
+
+    document.addEventListener("DOMContentLoaded", () => {
+        const socket = io(SIGNALING_SERVER);
+
+        socket.on("message", () => {
+            graph.number = 1;
+        });
+        socket.on("rejectJoin", () => {
+            alert("Deine Anfrage wurde abgelehnt. Probiere einen anderen Channel.");
+
+            const $enterChannel = document.getElementById("enter_channel");
+            const $waiting = document.getElementById("waiting");
+            const $data = document.getElementById("data");
+
+            $enterChannel.style.display = "block";
+            $waiting.style.display = "none";
+            $data.style.display = "none";
+        });
+        socket.on("startGraph", () => {
+            const $enterChannel = document.getElementById("enter_channel");
+            const $waiting = document.getElementById("waiting");
+            const $data = document.getElementById("data");
+
+            $enterChannel.style.display = "none";
+            $waiting.style.display = "none";
+            $data.style.display = "block";
+
+            graph = new Graph();
+            graph.setup();
+            graph.start();
+        })
+        socket.on("peerDisconnected", () => {
+            graph.stop();
+
+            const $enterChannel = document.getElementById("enter_channel");
+            const $waiting = document.getElementById("waiting");
+            const $data = document.getElementById("data");
+
+            $enterChannel.style.display = "none";
+            $waiting.style.display = "block";
+            $data.style.display = "none";
+        })
+        socket.on("changeInterval", message => {
+            graph.updateInterval(message.interval);
+
+            const $range = document.getElementById("range");
+            $range.value = message.interval / 1000;
+
+            const $rangeValue = document.getElementById("range_value");
+            $rangeValue.innerText = message.interval / 1000;
+        });
+
+        const connectToChannel = () => {
+            if (!channel) {
+                alert("Bitte gib einen Channel an.");
+                return;
+            }
+
+            socket.emit("join", {channel});
+
+            const $enterChannel = document.getElementById("enter_channel");
+            const $waiting = document.getElementById("waiting");
+            const $data = document.getElementById("data");
+
+            $enterChannel.style.display = "none";
+            $waiting.style.display = "block";
+            $data.style.display = "none";
+        }
+        document.getElementById("connect").addEventListener("click", () => {
+            channel = document.getElementById("channel").value;
+
+            connectToChannel();
+        });
+
+        document.getElementById("send").addEventListener("click", () => {
+            socket.emit("send");
+        });
+
+        document.getElementById("range").addEventListener("change", () => {
+            socket.emit("changeInterval", {interval: document.getElementById("range").value * 1000});
+        });
+
+        setInterval(async () => {
+            const channels = await (await fetch("/channels")).json();
+
+            const $availableChannels = document.getElementById("available_channels");
+
+            // Channel Liste leeren
+            while ($availableChannels.firstChild) {
+                $availableChannels.removeChild($availableChannels.firstChild);
+            }
+
+            for (const channelName of channels) {
+                const $channel = document.createElement("li");
+                $channel.innerText = channelName;
+
+                $availableChannels.appendChild($channel);
+
+                $channel.addEventListener("click", () => {
+                    channel = channelName;
+
+                    connectToChannel();
+                }, {once: true});
+            }
+        }, 1000);
+    });
+
+    document.addEventListener("resize", () => {
+        graph.setup();
+    });
+
+</script>
+</html>
